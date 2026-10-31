@@ -1,0 +1,4 @@
+wild_squirrel_1|squirrel|0|Anton Porsche|CC BY 4.0
+wild_squirrel_2|squirrel|0|Dennis.insect.filmer|CC BY-SA 4.0
+wild_rabbit_1|rabbit|0|Fowler&fowler|CC BY-SA 4.0
+wild_raccoon_1|raccoon|0|Uusijani|CC0
