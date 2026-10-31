@@ -20,7 +20,11 @@ class GameView(
     private val logicFactory: () -> GameLogic,
     private val onOwnerOverride: () -> Unit,
     private val onWildVisible: (Boolean) -> Unit = {},
+    /** Test-only slow motion for recordings (1 = real time). */
+    private val timeScale: Float = 1f,
 ) : SurfaceView(context), SurfaceHolder.Callback {
+    /** Set if hardware canvas posting stops blocking on vsync (surface wedged): use software canvas. */
+    @Volatile private var softwareCanvas = false
 
     @Volatile var logic: GameLogic = logicFactory()
         private set
@@ -96,7 +100,7 @@ class GameView(
             if (resetRequested) { resetRequested = false; logic = logicFactory() }
             val g = logic
             repeat(presses.getAndSet(0).coerceAtMost(1)) { g.press() }
-            g.update(dt)
+            g.update(dt * timeScale)
             val wildNow = g.wild && g.isCritterVisible
             if (wildNow != wildShown) {
                 wildShown = wildNow
@@ -104,7 +108,7 @@ class GameView(
             }
 
             val c = try {
-                if (Build.VERSION.SDK_INT >= 26) holder.lockHardwareCanvas() else holder.lockCanvas()
+                if (Build.VERSION.SDK_INT >= 26 && !softwareCanvas) holder.lockHardwareCanvas() else holder.lockCanvas()
             } catch (e: Exception) { null }
             if (c == null) { try { Thread.sleep(16) } catch (_: InterruptedException) {}; continue }
             try {
@@ -112,9 +116,18 @@ class GameView(
             } finally {
                 holder.unlockCanvasAndPost(c)
             }
+            // Posting normally blocks on vsync. If it stops blocking, cap the loop at ~125 fps so we
+            // never spin, and treat sustained >200 fps as a wedged hardware surface.
+            val frameNs = System.nanoTime() - now
+            if (frameNs < 8_000_000L) try { Thread.sleep((8_000_000L - frameNs) / 1_000_000L) } catch (_: InterruptedException) {}
             frames++; fpsT += dt
             if (fpsT >= 5f) {
-                Log.i(TAG, "FPS ${"%.1f".format(frames / fpsT)}")
+                val fps = frames / fpsT
+                Log.i(TAG, "FPS ${"%.1f".format(fps)}")
+                if (fps > 110f && !softwareCanvas && Build.VERSION.SDK_INT >= 26 && maxRefresh() < 100f) {
+                    softwareCanvas = true
+                    Log.w(TAG, "SURFACE_WEDGED fps=$fps -> software canvas")
+                }
                 frames = 0; fpsT = 0f
             }
         }
@@ -122,6 +135,9 @@ class GameView(
         // The next render thread starts with wildShown=false and re-shows it if still wild.
         if (wildShown) post { onWildVisible(false) }
     }
+
+    @Suppress("DEPRECATION")
+    private fun maxRefresh(): Float = display?.refreshRate ?: 60f
 
     companion object { const val TAG = "PeekabooGame" }
 }

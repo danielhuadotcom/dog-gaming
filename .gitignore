@@ -2,3 +2,5 @@
 build/
 local.properties
 *.apk
+e2e/out/
+__pycache__/

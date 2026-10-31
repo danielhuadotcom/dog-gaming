@@ -20,6 +20,7 @@ import java.io.File
  *   cooldown (float)       rest period in seconds after a session (default 600)
  *   ignoreCooldown (bool)  start playing even if resting
  *   audioDump (bool)       tee all speaker output to files/audio_out.wav
+ *   timeScale (float)      test-only slow motion for screen recordings (default 1)
  *   wild (float)           0..1 chance an appearance uses real wildlife footage (default 0.5)
  */
 class MainActivity : Activity() {
@@ -44,6 +45,7 @@ class MainActivity : Activity() {
         else prefs.getFloat("difficulty", 0f)
         var ignoreCooldown = ex?.getBoolean("ignoreCooldown", false) ?: false
         val wildChance = ex?.getFloat("wild", 0.5f) ?: 0.5f
+        val timeScale = (ex?.getFloat("timeScale", 1f) ?: 1f).coerceIn(0.05f, 1f)
         val dump = if (ex?.getBoolean("audioDump", false) == true) File(filesDir, "audio_out.wav") else null
 
         audio = AudioEngine(dump)
@@ -65,7 +67,7 @@ class MainActivity : Activity() {
             Log.i(GameView.TAG, "OWNER_OVERRIDE")
             prefs.edit().putLong("restUntil", 0).apply()
             view.restart()
-        }, onWildVisible = { show -> if (show) wildPlayer.show() else wildPlayer.hide() })
+        }, onWildVisible = { show -> if (show) wildPlayer.show() else wildPlayer.hide() }, timeScale = timeScale)
         val video = android.view.TextureView(this)
         val caption = android.widget.TextView(this).apply {
             textSize = 11f
@@ -74,7 +76,7 @@ class MainActivity : Activity() {
             setPadding(16, 8, 16, 8)
             visibility = View.GONE
         }
-        wildPlayer = WildPlayer(this, video, seed, caption)
+        wildPlayer = WildPlayer(this, video, seed, caption, speed = timeScale)
         val root = android.widget.FrameLayout(this)
         root.addView(view)
         // Footage sits above the game; touches fall through to the game view.
@@ -166,7 +168,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         ui.removeCallbacksAndMessages(null)
-        wildPlayer.release()
+        wildPlayer.shutdown()
         super.onDestroy()
     }
 

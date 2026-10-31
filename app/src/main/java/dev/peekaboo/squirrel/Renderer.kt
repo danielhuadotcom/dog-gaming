@@ -160,9 +160,9 @@ class Renderer {
     }
 
     private fun drawSparks(c: Canvas, x: Float, y: Float, s: Float, t: Float) {
-        val reach = s * (0.6f + t * 2.2f)
+        val reach = s * (0.6f + 1.4f * (1f - 1f / (1f + t * 1.5f)))
         fill.color = Palette.SPARK
-        fill.alpha = ((1f - t / 3.5f).coerceIn(0f, 1f) * 255).toInt()
+        fill.alpha = ((1f - t / 3.5f).coerceIn(0.25f, 1f) * 255).toInt()
         for (i in 0 until 10) {
             val a = i * (2 * PI / 10).toFloat() + t * 1.5f
             c.drawCircle(x + cos(a) * reach, y + sin(a) * reach * 0.8f, s * 0.09f, fill)

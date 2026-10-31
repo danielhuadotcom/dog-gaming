@@ -37,13 +37,13 @@ class AudioEngine(private val dumpFile: File?) {
     fun start() {
         if (running) return
         running = true
-        pending.clear() // don't burst sounds queued while paused
         val t = Thread({ loop() }, "peekaboo-audio").apply { priority = Thread.MAX_PRIORITY }
         thread = t // assign before start(): loop() exits as soon as thread !== itself
         t.start()
     }
 
     fun stop() {
+        pending.clear() // don't burst sounds queued while paused on the next start
         running = false
         thread?.join(500)
         thread = null
