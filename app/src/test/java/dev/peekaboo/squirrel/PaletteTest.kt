@@ -1,65 +1,59 @@
 package dev.peekaboo.squirrel
 
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.math.*
+import kotlin.math.abs
 
-/** Checks the palette against a dichromatic (dog-like, deuteranope) vision model. */
+/**
+ * Palette checks in a dog-cone model of an LCD (see DogVision / docs/DOG_VISION.md).
+ * Every contrast target must hold in the WORST case over 32 display/eye variants,
+ * because we don't know the exact spectra of the user's panel.
+ */
 class PaletteTest {
-    private fun lin(c: Int) = ((c / 255.0).let { if (it <= 0.04045) it / 12.92 else ((it + 0.055) / 1.055).pow(2.4) })
-    private fun rgb(c: Int) = doubleArrayOf(lin(c shr 16 and 255), lin(c shr 8 and 255), lin(c and 255))
+    private fun worst(f: (DogVision) -> Double) = DogVision.GRID.minOf(f)
+    private fun lRatio(a: Int, b: Int) = worst { it.of(a).l / it.of(b).l }
 
-    /** Viénot/Brettel/Mollon 1999 deuteranope simulation in linear RGB. */
-    private fun dog(c: Int): DoubleArray {
-        val (r, g, b) = rgb(c).let { Triple(it[0], it[1], it[2]) }
-        return doubleArrayOf(
-            0.29275 * r + 0.70725 * g,
-            0.29275 * r + 0.70725 * g,
-            -0.02234 * r + 0.02234 * g + b,
-        )
+    @Test fun modelSanity() {
+        val m = DogVision.NOMINAL
+        // Red and green both read as "yellow" to a dog, red much dimmer.
+        assertTrue(m.of(0xFFFF0000.toInt()).by < -0.8 && m.of(0xFF00FF00.toInt()).by < -0.8)
+        assertTrue(m.of(0xFFFF0000.toInt()).l < 0.5 * m.of(0xFF00FF00.toInt()).l)
+        // Cyan sits near the dog's neutral point (~480 nm): close to grey.
+        assertTrue(abs(m.of(0xFF00FFFF.toInt()).by) < 0.2)
+        assertEquals(0.0, m.of(0xFFFFFFFF.toInt()).by, 1e-9)
     }
 
-    private fun lum(v: DoubleArray) = 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]
-    private fun contrast(a: Int, b: Int): Double {
-        val la = lum(dog(a)) + 0.05; val lb = lum(dog(b)) + 0.05
-        return max(la, lb) / min(la, lb)
+    @Test fun critterPopsAgainstSky() {
+        assertTrue(lRatio(Palette.CRITTER, Palette.SKY_BOTTOM) >= 8.0)
+        assertTrue(lRatio(Palette.CRITTER, Palette.SKY_TOP) >= 8.0)
+        assertTrue(lRatio(Palette.CRITTER, Palette.SKY_FLASH) >= 3.0)
+        assertTrue(worst { it.of(Palette.SKY_BOTTOM).by - it.of(Palette.CRITTER).by } >= 1.3)
     }
 
-    private fun hsv(c: Int): FloatArray {
-        val r = (c shr 16 and 255) / 255f; val g = (c shr 8 and 255) / 255f; val b = (c and 255) / 255f
-        val mx = maxOf(r, g, b); val mn = minOf(r, g, b); val d = mx - mn
-        val h = when {
-            d == 0f -> 0f
-            mx == r -> 60f * (((g - b) / d) % 6f)
-            mx == g -> 60f * ((b - r) / d + 2f)
-            else -> 60f * ((r - g) / d + 4f)
-        }.let { if (it < 0) it + 360f else it }
-        return floatArrayOf(h, if (mx == 0f) 0f else d / mx, mx)
+    @Test fun critterDistinctFromBush() {
+        assertTrue(lRatio(Palette.CRITTER, Palette.BUSH) >= 2.5) // ~10x the dog brightness Weber fraction
+        assertTrue(worst { it.of(Palette.BUSH).by - it.of(Palette.CRITTER).by } >= 0.6)
     }
 
-    @Test fun onlyBluesYellowsAndGreys() {
+    @Test fun bushesStandOutFromSky() {
+        assertTrue(lRatio(Palette.BUSH, Palette.SKY_BOTTOM) >= 2.0)
+    }
+
+    @Test fun skyIsUnambiguouslyBlueToADog() {
+        for (c in intArrayOf(Palette.SKY_TOP, Palette.SKY_BOTTOM, Palette.SKY_FLASH))
+            assertTrue(worst { it.of(c).by } >= 0.6)
+    }
+
+    @Test fun everyColourIsBlueYellowOrNeutralNeverNearTheNeutralPoint() {
+        // A chromatic colour drifting toward BY≈0 (e.g. teal/cyan mixes) looks washed-out grey
+        // to a dog. Only true greys (R=G=B) may sit at BY≈0.
         for (c in Palette.ALL) {
-            val (h, s, _) = hsv(c).let { Triple(it[0], it[1], it[2]) }
-            val ok = s < 0.08f || h in 200f..250f || h in 40f..60f
-            assertTrue("colour #${Integer.toHexString(c)} hue=$h sat=$s is not dog-friendly", ok)
+            val r = c shr 16 and 255; val g = c shr 8 and 255; val b = c and 255
+            val grey = r == g && g == b
+            val by = DogVision.NOMINAL.of(c).by
+            val ok = if (grey) abs(by) < 1e-6 else abs(by) >= 0.5
+            assertTrue("#${Integer.toHexString(c)} BY=$by", ok)
         }
-    }
-
-    @Test fun critterPopsAgainstSkyInDogVision() {
-        assertTrue(contrast(Palette.CRITTER, Palette.SKY_TOP) > 7.0)
-        assertTrue(contrast(Palette.CRITTER, Palette.SKY_BOTTOM) > 4.5)
-        assertTrue(contrast(Palette.CRITTER, Palette.SKY_FLASH) > 3.0)
-    }
-
-    @Test fun critterDistinctFromBushInDogVision() {
-        assertTrue(contrast(Palette.CRITTER, Palette.BUSH) > 2.0)
-        // Yellow vs grey also differ in the dog's blue–yellow opponent channel.
-        val c = dog(Palette.CRITTER); val b = dog(Palette.BUSH)
-        val byC = c[2] - c[0]; val byB = b[2] - b[0]
-        assertTrue(abs(byC - byB) > 0.3)
-    }
-
-    @Test fun bushesVisibleAgainstSky() {
-        assertTrue(contrast(Palette.BUSH, Palette.SKY_BOTTOM) > 1.5)
     }
 }
