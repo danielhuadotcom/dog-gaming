@@ -30,6 +30,8 @@ and open the APK. Lay the tablet flat on the floor at full-ish brightness.
 
 Colours are chosen with a dog-cone model of an LCD (S 430 nm / L 555 nm cones × panel primaries),
 optimised for worst-case contrast across plausible panels — see [docs/DOG_VISION.md](docs/DOG_VISION.md).
+Sounds are matched to measured squirrel/chipmunk/mouse/leaf-litter spectra, the dog audiogram and tablet
+speaker limits — see [docs/DOG_HEARING.md](docs/DOG_HEARING.md).
 Sounds are synthesized squeaky-toy squeaks, chirps, leaf rustles and claw patter (no doorbells/barks).
 
 ## Testing
