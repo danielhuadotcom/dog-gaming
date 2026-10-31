@@ -67,11 +67,23 @@ class MainActivity : Activity() {
             view.restart()
         }, onWildVisible = { show -> if (show) wildPlayer.show() else wildPlayer.hide() })
         val video = android.view.TextureView(this)
-        wildPlayer = WildPlayer(this, video, seed)
+        val caption = android.widget.TextView(this).apply {
+            textSize = 11f
+            setTextColor(0xCCFFFFFF.toInt())
+            setShadowLayer(3f, 0f, 0f, 0xFF000000.toInt())
+            setPadding(16, 8, 16, 8)
+            visibility = View.GONE
+        }
+        wildPlayer = WildPlayer(this, video, seed, caption)
         val root = android.widget.FrameLayout(this)
         root.addView(view)
         // Footage sits above the game; touches fall through to the game view.
         root.addView(video)
+        root.addView(caption, android.widget.FrameLayout.LayoutParams(
+            android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+            android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+            android.view.Gravity.BOTTOM or android.view.Gravity.START,
+        ))
         setContentView(root)
         tickRestMessage()
     }

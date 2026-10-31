@@ -17,10 +17,16 @@ import kotlin.random.Random
  *
  * All methods must be called on the main thread except [ready], which is thread-safe.
  */
-class WildPlayer(private val ctx: Context, private val view: TextureView, seed: Long) :
+class WildPlayer(
+    private val ctx: Context,
+    private val view: TextureView,
+    seed: Long,
+    /** Attribution caption shown while a clip plays (CC BY / BY-SA require credit). */
+    private val caption: android.widget.TextView? = null,
+) :
     TextureView.SurfaceTextureListener {
 
-    data class Clip(val res: Int, val name: String, val animal: String, val hasAudio: Boolean)
+    data class Clip(val res: Int, val name: String, val animal: String, val hasAudio: Boolean, val credit: String)
 
     val clips: List<Clip> = loadManifest()
     private val rng = Random(seed xor 0x5EED)
@@ -46,7 +52,10 @@ class WildPlayer(private val ctx: Context, private val view: TextureView, seed: 
             val p = line.trim().split('|')
             if (p.size < 3 || line.startsWith("#")) return@mapNotNull null
             val res = ctx.resources.getIdentifier(p[0], "raw", ctx.packageName)
-            if (res == 0) null else Clip(res, p[0], p[1], p[2] == "1")
+            if (res == 0) null else Clip(
+                res, p[0], p[1], p[2] == "1",
+                listOfNotNull(p.getOrNull(3), p.getOrNull(4)).joinToString(" · ") + " · Wikimedia Commons",
+            )
         }
     }
 
@@ -61,12 +70,15 @@ class WildPlayer(private val ctx: Context, private val view: TextureView, seed: 
         showing = true
         view.animate().cancel()
         view.alpha = 1f
+        caption?.text = current?.credit
+        caption?.visibility = android.view.View.VISIBLE
         Log.i(TAG, "WILD show clip=${current?.name} animal=${current?.animal}")
     }
 
     fun hide() {
         if (!showing) return
         showing = false
+        caption?.visibility = android.view.View.GONE
         view.animate().alpha(0f).setDuration(180).withEndAction { prepareNext() }.start()
         // pause() throws IllegalStateException if the player hit a playback error meanwhile.
         try { player?.pause() } catch (e: IllegalStateException) { Log.w(TAG, "WILD pause failed", e) }
@@ -76,6 +88,7 @@ class WildPlayer(private val ctx: Context, private val view: TextureView, seed: 
     fun release() {
         // Cancelling also drops a pending fade's prepareNext() (would leak a new player after release).
         view.animate().cancel()
+        caption?.visibility = android.view.View.GONE
         view.alpha = 0f // else a stale frame would cover the game once the surface comes back
         player?.release(); player = null
         prepared = false; showing = false
