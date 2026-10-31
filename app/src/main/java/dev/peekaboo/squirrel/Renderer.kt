@@ -84,7 +84,19 @@ class Renderer {
         text.textSize = h * 0.032f
         text.color = Palette.HUD
         text.textAlign = Paint.Align.LEFT
-        c.drawText(hud(g), h * 0.03f, h * 0.06f, text)
+        c.drawText(hud(g), h * 0.14f, h * 0.075f, text)
+        drawGear(c)
+    }
+
+    /** Trainer gear, top-left. Hit area is generous for human fingers. */
+    fun inGear(x: Float, y: Float) = w > 0 && x < h * 0.13f && y < h * 0.13f
+
+    private fun drawGear(c: Canvas) {
+        text.color = Palette.HUD
+        text.textAlign = Paint.Align.CENTER
+        text.textSize = h * 0.075f
+        c.drawText("\u2699", h * 0.065f, h * 0.09f, text)
+        text.textAlign = Paint.Align.LEFT
     }
 
     // HUD text is rebuilt only when a shown value changes (String.format every frame is
@@ -92,13 +104,15 @@ class Renderer {
     private var hudKey = Long.MIN_VALUE
     private var hudText = ""
     private fun hud(g: GameLogic): String {
-        val rem = g.remainingSeconds.toInt()
+        val unlimited = g.remainingSeconds.isInfinite()
+        val rem = if (unlimited) 0 else g.remainingSeconds.toInt()
         val lvl = (g.difficulty * 100).toInt()
-        val key = (g.hits.toLong() shl 40) or (lvl.toLong() shl 24) or rem.toLong()
+        val key = (g.hits.toLong() shl 40) or (lvl.toLong() shl 24) or (if (unlimited) 0xFFFFFFL else rem.toLong())
         if (key != hudKey) {
             hudKey = key
             val ss = rem % 60
-            hudText = "★ ${g.hits}   lvl $lvl%   ${rem / 60}:${if (ss < 10) "0" else ""}$ss"
+            val time = if (unlimited) "∞" else "${rem / 60}:${if (ss < 10) "0" else ""}$ss"
+            hudText = "★ ${g.hits}   lvl $lvl%   $time   (Back = trainer menu)"
         }
         return hudText
     }
@@ -202,5 +216,6 @@ class Renderer {
         c.drawText(restLine(g), mx, h * 0.66f, text)
         text.textSize = h * 0.03f
         c.drawText(restMessage, mx, h * 0.74f, text)
+        drawGear(c)
     }
 }

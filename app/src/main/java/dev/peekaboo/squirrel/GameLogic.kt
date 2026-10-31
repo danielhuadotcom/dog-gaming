@@ -14,7 +14,7 @@ enum class Sound { SQUEAK, CHIRP, RUSTLE, SCURRY, CELEBRATE, ALL_DONE }
  * EMERGE    critter peeks up over the bush (counts as visible)
  * VISIBLE   critter is out in the open, darting start-stop
  * RETREAT   critter runs back and ducks behind a bush (still counts as visible)
- * CELEBRATE dog scored: squeak, spin, treat cue
+ * CELEBRATE dog scored (or trainer marked a win): squeak, spin, treat cue
  * DONE      session over, resting screen
  */
 enum class Phase { HIDDEN, RUSTLE, EMERGE, VISIBLE, RETREAT, CELEBRATE, DONE }
@@ -25,10 +25,21 @@ interface GameListener {
 }
 
 data class GameConfig(
+    /** Session length; Float.POSITIVE_INFINITY = unlimited. */
     val sessionSeconds: Float = 240f,
     val startDifficulty: Float = 0f,
     /** Chance that an appearance uses real wildlife footage instead of the cartoon critter. */
     val wildChance: Float = 0f,
+    /** Adjust difficulty automatically from hits/misses. Off = level stays where the trainer set it. */
+    val adaptive: Boolean = true,
+    /** Training level: how long the critter stays out before hiding and re-popping. */
+    val repopSeconds: Float = 8f,
+    /** How long the treat screen stays up. */
+    val treatSeconds: Float = 3.5f,
+    /** A tap on the treat screen (after the squeak) dismisses it. */
+    val tapSkipsTreat: Boolean = true,
+    /** Make the first appearance real footage as soon as a clip is buffered. */
+    val wildFirst: Boolean = true,
 )
 
 /** All timing knobs derived from a single 0..1 difficulty value. */
@@ -45,9 +56,11 @@ data class Tuning(
     companion object {
         const val TRAINING_BELOW = 0.15f
 
-        fun of(d: Float): Tuning {
+        fun of(d: Float, repopSeconds: Float = 8f): Tuning {
             if (d < TRAINING_BELOW) {
-                return Tuning(true, Float.POSITIVE_INFINITY, 1f, 1f, 0.8f, 1, 0f, 0f)
+                // Level 1: long, easy appearances that keep coming back on their own (no boop needed),
+                // so a dog that isn't engaging yet still sees fresh appearances (and footage).
+                return Tuning(true, repopSeconds, 1.0f, 1.6f, 0.8f, 1, 0f, 0f)
             }
             val t = ((d - TRAINING_BELOW) / (1f - TRAINING_BELOW)).coerceIn(0f, 1f)
             var spots = 1 + floor(t * 3.99f).toInt()
@@ -70,7 +83,8 @@ internal fun lerp(a: Float, b: Float, t: Float) = a + (b - a) * t
 
 class GameLogic(
     seed: Long,
-    val config: GameConfig,
+    /** Trainer settings can be swapped live (applied from the next appearance). */
+    var config: GameConfig,
     private val listener: GameListener,
     /** Whether a wildlife clip is buffered and ready to show instantly. */
     private val wildReady: () -> Boolean = { false },
@@ -78,16 +92,20 @@ class GameLogic(
     private val rng = Random(seed)
 
     var difficulty = config.startDifficulty.coerceIn(0f, 1f); private set
-    var tuning = Tuning.of(difficulty); private set
+    var tuning = Tuning.of(difficulty, config.repopSeconds); private set
     var phase = Phase.HIDDEN; private set
     var phaseTime = 0f; private set
     private var phaseDuration = 1f
     var elapsed = 0f; private set
     var hits = 0; private set
     var misses = 0; private set
+    /** Wins the trainer marked by hand (not used for difficulty). */
+    var marks = 0; private set
     private val history = ArrayDeque<Boolean>()
     private var consecutiveMisses = 0
     private var mashExtra = 0f
+    private var firstAppearance = true
+    private var forceWild: Boolean? = null
 
     // Hiding spots (normalized x across the screen).
     var spotCount = 1; private set
@@ -124,27 +142,29 @@ class GameLogic(
 
     init {
         layoutSpots()
-        listener.onEvent("START seed=$seed d=${fmt(difficulty)} session=${config.sessionSeconds}")
-        if (tuning.training) startTraining() else enter(Phase.HIDDEN, hideTime())
+        listener.onEvent("START seed=$seed d=${fmt(difficulty)} session=${fmt(config.sessionSeconds)}")
+        enter(Phase.HIDDEN, if (tuning.training) 1.0f else hideTime())
     }
 
-    /** Put the game straight into the resting state (cooldown still active from a previous session). */
+    /** Put the game straight into the resting state. */
     fun rest() {
         enter(Phase.DONE, Float.POSITIVE_INFINITY)
     }
 
-    // ---------------------------------------------------------------- input
+    // ---------------------------------------------------------------- dog input
 
     /** A nose boop / paw / button press. Returns true if it scored. */
     fun press(): Boolean {
         if (isCritterVisible) {
             hits++
             recordTrial(true)
-            listener.onSound(Sound.SQUEAK)
-            listener.onSound(Sound.CELEBRATE)
-            listener.onEvent("PRESS hit phase=${phase.name} hits=$hits")
-            enter(Phase.CELEBRATE, 3.5f)
+            celebrate("PRESS hit phase=${phase.name} hits=$hits")
             return true
+        }
+        if (phase == Phase.CELEBRATE && config.tapSkipsTreat && phaseTime >= 0.8f) {
+            listener.onEvent("PRESS skip_treat")
+            afterCelebrate()
+            return false
         }
         if ((phase == Phase.HIDDEN || phase == Phase.RUSTLE) && tuning.mashPenalty > 0f && mashExtra < 2f) {
             // No buzzer, no punishment: mashing just quietly delays the next peek.
@@ -156,6 +176,36 @@ class GameLogic(
         return false
     }
 
+    // ---------------------------------------------------------------- trainer commands
+
+    /** Trainer marks a win right now (e.g. the dog looked at / nosed toward the screen). */
+    fun trainerWin() {
+        marks++
+        celebrate("TRAINER win marks=$marks")
+    }
+
+    /** Trainer: bring the critter out right now. wild = true footage, false cartoon, null = normal pick. */
+    fun showNow(wild: Boolean? = null) {
+        if (phase == Phase.DONE) elapsed = 0f // trainer asked for play: reopen the session
+        forceWild = wild
+        rustleSpot = rng.nextInt(spotCount)
+        listener.onEvent("TRAINER show wild=$wild")
+        startEmerge()
+    }
+
+    /** Trainer: dismiss the treat screen now. */
+    fun skipTreat() {
+        if (phase == Phase.CELEBRATE) { listener.onEvent("TRAINER skip_treat"); afterCelebrate() }
+    }
+
+    /** Trainer: set the level directly (applies from the next appearance). */
+    fun setDifficulty(d: Float) {
+        val before = difficulty
+        difficulty = d.coerceIn(0f, 1f)
+        history.clear(); consecutiveMisses = 0
+        listener.onEvent("TRAINER level ${fmt(before)} -> ${fmt(difficulty)}")
+    }
+
     // ---------------------------------------------------------------- tick
 
     fun update(dtIn: Float) {
@@ -164,7 +214,13 @@ class GameLogic(
         phaseTime += dt
         when (phase) {
             Phase.HIDDEN -> if (phaseTime >= phaseDuration) {
-                if (sessionOver) finish() else startRustle()
+                when {
+                    sessionOver -> finish()
+                    // First appearance: give the first clip a few seconds to buffer so it can be footage.
+                    firstAppearance && config.wildFirst && config.wildChance > 0f && !wildReady() &&
+                        phaseTime < phaseDuration + 4f -> Unit
+                    else -> startRustle()
+                }
             }
             Phase.RUSTLE -> if (phaseTime >= phaseDuration) {
                 when {
@@ -182,20 +238,26 @@ class GameLogic(
             }
             Phase.VISIBLE -> tickVisible(dt)
             Phase.RETREAT -> tickRetreat()
-            Phase.CELEBRATE -> if (phaseTime >= phaseDuration) {
-                when {
-                    sessionOver -> finish()
-                    // tuning is only refreshed on HIDDEN, so judge by the *current* difficulty:
-                    // otherwise graduating out of training yields one never-ending appearance.
-                    Tuning.of(difficulty).training -> startTraining()
-                    else -> enter(Phase.HIDDEN, 1.0f + rng.nextFloat())
-                }
-            }
+            Phase.CELEBRATE -> if (phaseTime >= phaseDuration) afterCelebrate()
             Phase.DONE -> Unit
         }
     }
 
     // ---------------------------------------------------------------- phases
+
+    private fun celebrate(event: String) {
+        listener.onSound(Sound.SQUEAK)
+        listener.onSound(Sound.CELEBRATE)
+        listener.onEvent(event)
+        if (critterBehindBush) { // marked while hidden: pop the critter out front so it can spin
+            critterBehindBush = false; leap = 1f; peek = 1f
+        }
+        enter(Phase.CELEBRATE, config.treatSeconds)
+    }
+
+    private fun afterCelebrate() {
+        if (sessionOver) finish() else enter(Phase.HIDDEN, 1.0f + rng.nextFloat() * 0.6f)
+    }
 
     private fun enter(p: Phase, duration: Float) {
         phase = p
@@ -209,7 +271,7 @@ class GameLogic(
             leap = 0f
             moving = false
             // Re-layout is only safe while hidden.
-            tuning = Tuning.of(difficulty)
+            tuning = Tuning.of(difficulty, config.repopSeconds)
             if (tuning.spots != spotCount) layoutSpots()
         }
         listener.onEvent("PHASE ${p.name} d=${fmt(difficulty)} spots=$spotCount dur=${fmt(duration)}")
@@ -223,26 +285,6 @@ class GameLogic(
         currentSpot = currentSpot.coerceAtMost(spotCount - 1)
     }
 
-    private fun startTraining() {
-        // Level 1: critter just sits out in the open. Any press wins.
-        tuning = Tuning.of(difficulty)
-        if (tuning.spots != spotCount) layoutSpots()
-        phase = Phase.HIDDEN // so enter() below logs a transition cleanly
-        critterX = 0.5f
-        critterBehindBush = false
-        leap = 1f
-        peek = 1f
-        freezeLeft = 0.5f
-        moving = false
-        pickWild()
-        if (wild) listener.onEvent("WILD start training")
-        listener.onSound(Sound.CHIRP)
-        phase = Phase.VISIBLE
-        phaseTime = 0f
-        phaseDuration = Float.POSITIVE_INFINITY
-        listener.onEvent("PHASE VISIBLE training d=${fmt(difficulty)}")
-    }
-
     private fun startRustle() {
         rustleSpot = rng.nextInt(spotCount)
         rustleFake = rng.nextFloat() < tuning.fakeChance
@@ -252,13 +294,21 @@ class GameLogic(
     }
 
     private fun pickWild() {
-        wild = config.wildChance > 0f && rng.nextFloat() < config.wildChance && wildReady()
+        val forced = forceWild
+        forceWild = null
+        wild = when {
+            forced != null -> forced && wildReady()
+            config.wildChance <= 0f -> false
+            firstAppearance && config.wildFirst -> wildReady()
+            else -> rng.nextFloat() < config.wildChance && wildReady()
+        }
+        firstAppearance = false
     }
 
     private fun startEmerge() {
         pickWild()
         if (wild) listener.onEvent("WILD start")
-        currentSpot = rustleSpot
+        currentSpot = rustleSpot.coerceIn(0, spotCount - 1)
         critterX = spotX[currentSpot]
         critterBehindBush = true
         peek = 0f
@@ -269,7 +319,7 @@ class GameLogic(
     }
 
     private fun startVisible() {
-        enter(Phase.VISIBLE, if (wild) tuning.window * 1.5f else tuning.window)
+        enter(Phase.VISIBLE, if (wild && !tuning.training) tuning.window * 1.5f else tuning.window)
         critterBehindBush = false
         peek = 1f
         leap = 0f
@@ -303,16 +353,11 @@ class GameLogic(
         } else {
             freezeLeft -= dt
             if (freezeLeft <= 0f) {
-                // Training appearances have no window; still end the session on time.
-                if (tuning.training && sessionOver) {
-                    finish()
-                    return
-                }
-                if (!tuning.training && phaseTime >= phaseDuration) {
+                if (phaseTime >= phaseDuration || sessionOver) {
                     startRetreat()
                     return
                 }
-                startDart(if (tuning.training) 0.12f else 0.35f)
+                startDart(if (tuning.training) 0.25f else 0.35f)
             }
         }
     }
@@ -355,16 +400,21 @@ class GameLogic(
             peek = (1f - (phaseTime - run) / (phaseDuration - run)).coerceIn(0f, 1f)
         }
         if (phaseTime >= phaseDuration) {
-            misses++
-            recordTrial(false)
-            listener.onEvent("TRIAL miss misses=$misses")
+            if (tuning.training) {
+                // Training re-pops are not misses: the dog isn't being tested yet.
+                listener.onEvent("TRAINING repop")
+            } else {
+                misses++
+                recordTrial(false)
+                listener.onEvent("TRIAL miss misses=$misses")
+            }
             if (sessionOver) finish() else enter(Phase.HIDDEN, hideTime())
         }
     }
 
     private fun finish() {
         listener.onSound(Sound.ALL_DONE)
-        listener.onEvent("SESSION_DONE hits=$hits misses=$misses d=${fmt(difficulty)}")
+        listener.onEvent("SESSION_DONE hits=$hits misses=$misses marks=$marks d=${fmt(difficulty)}")
         critterBehindBush = true
         peek = 0f
         enter(Phase.DONE, Float.POSITIVE_INFINITY)
@@ -372,8 +422,9 @@ class GameLogic(
 
     // ---------------------------------------------------------------- adaptation
 
-    /** Keep the dog winning ~70–80% of the time. */
+    /** Keep the dog winning ~70–80% of the time (unless the trainer turned auto-level off). */
     private fun recordTrial(hit: Boolean) {
+        if (!config.adaptive) return
         history.addLast(hit)
         while (history.size > 8) history.removeFirst()
         consecutiveMisses = if (hit) 0 else consecutiveMisses + 1

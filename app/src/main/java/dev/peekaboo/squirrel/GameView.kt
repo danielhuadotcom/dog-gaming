@@ -3,7 +3,6 @@ package dev.peekaboo.squirrel
 import android.annotation.SuppressLint
 import android.content.Context
 import android.os.Build
-import android.os.SystemClock
 import android.util.Log
 import android.view.MotionEvent
 import android.view.SurfaceHolder
@@ -18,7 +17,8 @@ import java.util.concurrent.atomic.AtomicInteger
 class GameView(
     context: Context,
     private val logicFactory: () -> GameLogic,
-    private val onOwnerOverride: () -> Unit,
+    /** Trainer gear (top-left corner) tapped. */
+    private val onGear: () -> Unit,
     private val onWildVisible: (Boolean) -> Unit = {},
     /** Test-only slow motion for recordings (1 = real time). */
     private val timeScale: Float = 1f,
@@ -34,8 +34,10 @@ class GameView(
     @Volatile private var running = false
     @Volatile private var thread: Thread? = null
 
-    // Owner override: hold the top-right corner for 3 s.
-    private var cornerDownAt = -1L
+    /** Trainer commands, run on the render thread so GameLogic is only ever touched there. */
+    private val commands = java.util.concurrent.ConcurrentLinkedQueue<(GameLogic) -> Unit>()
+    /** Trainer panel open: freeze the game. */
+    @Volatile var paused = false
 
     init {
         holder.addCallback(this)
@@ -46,23 +48,13 @@ class GameView(
 
     fun restart() { resetRequested = true }
 
+    fun command(c: (GameLogic) -> Unit) { commands.add(c) }
+
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
-        when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
-                val i = e.actionIndex
-                val inCorner = e.getX(i) > width * 0.92f && e.getY(i) < height * 0.12f
-                if (inCorner && logic.phase == Phase.DONE) cornerDownAt = SystemClock.uptimeMillis()
-                else press()
-            }
-            MotionEvent.ACTION_MOVE -> if (cornerDownAt > 0 && SystemClock.uptimeMillis() - cornerDownAt > 3000) {
-                cornerDownAt = -1
-                onOwnerOverride()
-            }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                if (cornerDownAt > 0 && SystemClock.uptimeMillis() - cornerDownAt > 3000) onOwnerOverride()
-                cornerDownAt = -1
-            }
+        if (e.actionMasked == MotionEvent.ACTION_DOWN || e.actionMasked == MotionEvent.ACTION_POINTER_DOWN) {
+            val i = e.actionIndex
+            if (renderer.inGear(e.getX(i), e.getY(i))) onGear() else press()
         }
         return true
     }
@@ -99,8 +91,11 @@ class GameView(
             last = now
             if (resetRequested) { resetRequested = false; logic = logicFactory() }
             val g = logic
-            repeat(presses.getAndSet(0).coerceAtMost(1)) { g.press() }
-            g.update(dt * timeScale)
+            while (true) { val c = commands.poll() ?: break; c(g) }
+            if (paused) presses.set(0) else {
+                repeat(presses.getAndSet(0).coerceAtMost(1)) { g.press() }
+                g.update(dt * timeScale)
+            }
             val wildNow = g.wild && g.isCritterVisible
             if (wildNow != wildShown) {
                 wildShown = wildNow

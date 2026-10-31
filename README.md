@@ -15,16 +15,29 @@ and open the APK. Lay the tablet flat on the floor at full-ish brightness.
 
 ## How it plays
 
-- **Level 1 (training):** the critter just sits there; any boop wins. Teaches "boop = treat".
-- **Levels 2+:** rustle → peek → start-stop darting → hides again. Shorter windows, more bushes and
-  fake-out rustles as the dog improves. Adaptive difficulty keeps the dog winning ~70–80%.
+- **The dog** just touches the screen (anywhere) or presses any big button while the critter is out.
+- **Training level:** easy appearances that hide and re-pop every few seconds on their own, so a dog that
+  isn't booping yet still keeps seeing fresh critters and real footage.
+- **Levels 2+:** rustle → peek → start-stop darting → hides again; shorter windows, more bushes and
+  fake-out rustles as the dog improves. Auto-level keeps the dog winning ~70–80% (can be switched off).
+- **Real footage:** Creative Commons squirrel/rabbit/raccoon clips with real squirrel/chipmunk calls,
+  credited on screen. The first appearance is footage as soon as a clip has loaded.
 - **No penalty buzzer.** At higher levels, mashing just quietly delays the next peek.
-- **Wild Mode:** about half of appearances use real Creative Commons footage of squirrels, a rabbit
-  and a raccoon (credited on screen).
-- **Sessions:** 4 minutes, then a calm "all done" tone, dim rest screen and 10-minute cooldown.
-  Owner override: hold the top-right corner for 3 s.
-- **Input:** touch, any keyboard/USB/Bluetooth button (Bluetooth camera shutters work), volume-up.
-  Back exits.
+
+## Trainer controls (nothing is locked)
+
+Press **Back** (or tap the ⚙ in the top-left corner) to open the trainer panel; the game pauses.
+
+- **Settings** (tap to cycle): cartoon / mixed / footage-only · level · auto-adjust on/off ·
+  session 2/5/10 min/unlimited · rest after session off/5/10 min (default off) · treat screen
+  1.5/3.5/6 s · tap dismisses treat screen · training re-pop interval · animal sounds on/off.
+- **Do it now:** show critter · show real footage · **mark a win** (for shaping: reward a look or a
+  nose-touch) · skip treat screen · restart session · reset level · exit.
+
+### Suggested first sessions
+1. Footage only, Training level, treat screen 3.5 s. Sit with the dog.
+2. Hit **Mark a win** the moment the dog *looks* at the screen; hand a treat on the squeak.
+3. Then only for moving toward it, then only for touching it. Soon the squeak itself means "treat!".
 
 ## Designed for dog eyes and ears
 

@@ -54,6 +54,39 @@ class WildPlayer(
 
     val ready: Boolean get() = prepared && !showing
 
+    /** Real squirrel/chipmunk calls over leaf rustle, looped while footage is up (clips are silent). */
+    @Volatile var clipSounds = true
+    private val sounds = android.media.SoundPool.Builder().setMaxStreams(2).setAudioAttributes(
+        AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_GAME)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build()
+    ).build()
+    private val soundIds = listOf("wild_snd_grey", "wild_snd_palm", "wild_snd_chip").mapNotNull { n ->
+        val id = ctx.resources.getIdentifier(n, "raw", ctx.packageName)
+        if (id == 0) null else sounds.load(ctx, id, 1)
+    }
+    private var soundStream = 0
+    /** Main thread (SoundPool calls back on the creating thread's looper). */
+    private val loadedSounds = HashSet<Int>()
+    private var soundPending = false
+
+    init {
+        sounds.setOnLoadCompleteListener { _, id, status ->
+            if (status != 0) { Log.w(TAG, "WILD sound load failed id=$id status=$status"); return@setOnLoadCompleteListener }
+            loadedSounds += id
+            // A clip came up before any call track had decoded: start its sound now.
+            if (soundPending && showing && !awaitingReveal) startSound()
+        }
+    }
+
+    private fun startSound() {
+        soundPending = false
+        if (!clipSounds) return
+        val ready = soundIds.filter { it in loadedSounds }
+        if (ready.isEmpty()) { soundPending = true; return }
+        soundStream = sounds.play(ready[rng.nextInt(ready.size)], 0.85f, 0.85f, 1, -1, 1f)
+        Log.i(TAG, "WILD sound started=${soundStream != 0}")
+    }
+
     init {
         view.surfaceTextureListener = this
         view.alpha = 0f
@@ -93,7 +126,13 @@ class WildPlayer(
         Log.i(TAG, "WILD show clip=${current?.name} animal=${current?.animal}")
     }
 
+    private fun stopSound() {
+        soundPending = false
+        if (soundStream != 0) { sounds.stop(soundStream); soundStream = 0 }
+    }
+
     fun hide() {
+        stopSound()
         if (!showing) return
         showing = false
         awaitingReveal = false
@@ -108,6 +147,7 @@ class WildPlayer(
     }
 
     fun release() {
+        stopSound()
         view.animate().cancel() // also drops a pending fade's prepareNext()
         caption?.visibility = View.GONE
         view.alpha = 0f // else a stale frame would cover the game once the surface comes back
@@ -119,6 +159,7 @@ class WildPlayer(
     fun shutdown() {
         released = true
         release()
+        sounds.release()
         bgThread.quitSafely()
     }
 
@@ -129,6 +170,7 @@ class WildPlayer(
         caption?.text = current?.credit
         caption?.visibility = View.VISIBLE
         Log.i(TAG, "WILD visible clip=${current?.name}")
+        startSound()
     }
 
     // ------------------------------------------------------------ bg thread

@@ -23,20 +23,21 @@ class GameLogicTest {
     @Test fun trainingModeAnyPressWins() {
         val (g, rec) = game(0f)
         assertTrue(g.tuning.training)
-        assertTrue(g.isCritterVisible)
-        g.run(1f)
+        assertTrue("critter appears quickly", g.run(3f) { it.isCritterVisible })
         assertTrue(g.press())
         assertEquals(Phase.CELEBRATE, g.phase)
         assertTrue(rec.sounds.containsAll(listOf(Sound.SQUEAK, Sound.CELEBRATE)))
-        g.run(4f)
-        assertTrue("training critter comes back after celebration", g.isCritterVisible)
+        assertTrue("training critter comes back after celebration", g.run(8f) { it.isCritterVisible })
     }
 
-    @Test fun trainingCritterStaysVisibleIndefinitely() {
-        val (g, _) = game(0f)
+    @Test fun trainingRepopsOnItsOwnAndNeverCountsMisses() {
+        // A dog that never boops still gets fresh appearances (and therefore footage chances).
+        val (g, rec) = game(0f, session = 10_000f)
         g.run(60f)
-        assertTrue(g.isCritterVisible)
+        val appearances = rec.events.count { it.startsWith("PHASE EMERGE") }
+        assertTrue("re-popped $appearances times in 60 s", appearances >= 4)
         assertEquals(0, g.misses)
+        assertEquals(0f, g.difficulty, 0f)
     }
 
     @Test fun pressWhileHiddenDoesNothingAndHasNoBuzzer() {
@@ -76,7 +77,7 @@ class GameLogicTest {
 
     @Test fun difficultyRisesWhenDogKeepsWinning() {
         val (g, _) = game(0f, session = 10_000f)
-        repeat(12) { g.run(4f) { it.isCritterVisible && it.phase != Phase.CELEBRATE }; g.press() }
+        repeat(14) { g.run(12f) { it.isCritterVisible && it.phase != Phase.CELEBRATE }; g.press() }
         assertTrue("got harder: ${g.difficulty}", g.difficulty > Tuning.TRAINING_BELOW)
     }
 
@@ -122,10 +123,11 @@ class GameLogicTest {
     }
 
     @Test fun sessionWaitsForCelebrationToFinish() {
-        val (g, _) = game(0f, session = 1f)
-        g.run(0.9f); assertTrue(g.press())
-        g.update(0.1f); g.update(0.1f)
-        assertEquals(Phase.CELEBRATE, g.phase)
+        val (g, _) = game(0f, session = 3f)
+        assertTrue(g.run(2.9f) { it.isCritterVisible })
+        assertTrue(g.press())
+        g.run(0.5f)
+        assertEquals("session time is up but the treat screen stays", Phase.CELEBRATE, g.phase)
         g.run(4f)
         assertEquals(Phase.DONE, g.phase)
     }
@@ -182,5 +184,107 @@ class GameLogicTest {
         assertFalse("normal play after graduating", g.tuning.training)
         // Ignore the critter: it must eventually retreat (previously it stayed out forever).
         assertTrue(g.run(60f) { it.misses > 0 })
+    }
+
+    // ---------------------------------------------------------------- trainer controls
+
+    @Test fun trainerCanMarkAWinAnytime() {
+        val (g, rec) = game(0.5f)
+        assertEquals(Phase.HIDDEN, g.phase)
+        g.trainerWin()
+        assertEquals(Phase.CELEBRATE, g.phase)
+        assertEquals(1, g.marks)
+        assertEquals("marks don't count as dog hits", 0, g.hits)
+        assertTrue(Sound.SQUEAK in rec.sounds)
+    }
+
+    @Test fun trainerCanShowCritterOrFootageNow() {
+        val g = GameLogic(1, GameConfig(10_000f, 0.5f, wildChance = 0f), Rec(), wildReady = { true })
+        g.showNow(wild = true)
+        assertEquals(Phase.EMERGE, g.phase)
+        assertTrue("footage forced even with wildChance 0", g.wild)
+        g.run(10f) { it.phase == Phase.HIDDEN }
+        g.showNow(wild = false)
+        assertFalse(g.wild)
+        assertTrue(g.isCritterVisible)
+    }
+
+    @Test fun showNowReopensAFinishedSession() {
+        val (g, _) = game(0.4f, session = 5f)
+        g.run(30f)
+        assertEquals(Phase.DONE, g.phase)
+        g.showNow()
+        assertTrue(g.isCritterVisible)
+    }
+
+    @Test fun treatScreenCanBeDismissed() {
+        val (g, _) = game(0.5f)
+        g.trainerWin()
+        g.skipTreat()
+        assertEquals(Phase.HIDDEN, g.phase)
+
+        g.trainerWin()
+        g.run(0.3f)
+        assertFalse("tap right after the win doesn't eat the squeak", g.press())
+        assertEquals(Phase.CELEBRATE, g.phase)
+        g.run(0.6f)
+        g.press()
+        assertEquals("tap dismisses the treat screen", Phase.HIDDEN, g.phase)
+    }
+
+    @Test fun tapToDismissCanBeTurnedOff() {
+        val g = GameLogic(1, GameConfig(10_000f, 0.5f, tapSkipsTreat = false), Rec())
+        g.trainerWin(); g.run(1f); g.press()
+        assertEquals(Phase.CELEBRATE, g.phase)
+    }
+
+    @Test fun treatScreenLengthIsConfigurable() {
+        val g = GameLogic(1, GameConfig(10_000f, 0.5f, treatSeconds = 1.5f), Rec())
+        g.trainerWin(); g.run(1.6f)
+        assertEquals(Phase.HIDDEN, g.phase)
+    }
+
+    @Test fun firstAppearanceIsFootageOnceBuffered() {
+        var ready = false
+        val g = GameLogic(3, GameConfig(10_000f, 0f, wildChance = 0.5f), Rec(), wildReady = { ready })
+        g.run(1.5f)
+        assertEquals("waits for the clip to buffer", Phase.HIDDEN, g.phase)
+        ready = true
+        assertTrue(g.run(3f) { it.isCritterVisible })
+        assertTrue(g.wild)
+    }
+
+    @Test fun footageOnlyModeUsesFootageEveryTime() {
+        val rec = Rec()
+        val g = GameLogic(4, GameConfig(10_000f, 0f, wildChance = 1f), rec, wildReady = { true })
+        g.run(120f)
+        val emerges = rec.events.count { it.startsWith("PHASE EMERGE") }
+        val wilds = rec.events.count { it == "WILD start" }
+        assertTrue(emerges >= 5); assertEquals(emerges, wilds)
+    }
+
+    @Test fun autoLevelOffKeepsTheTrainersLevel() {
+        val g = GameLogic(5, GameConfig(10_000f, 0.6f, adaptive = false), Rec())
+        g.run(300f)
+        assertTrue(g.misses >= 3)
+        assertEquals(0.6f, g.difficulty, 0f)
+    }
+
+    @Test fun trainerCanChangeLevelAndSettingsLive() {
+        val (g, _) = game(0f, session = 10_000f)
+        g.setDifficulty(0.8f)
+        g.config = g.config.copy(repopSeconds = 5f, wildChance = 1f)
+        assertTrue(g.run(10f) { it.phase == Phase.VISIBLE })
+        assertTrue(g.run(20f) { it.phase == Phase.HIDDEN })
+        assertFalse("new level applied at the next hide", g.tuning.training)
+        assertEquals(5f, g.config.repopSeconds, 0f)
+        assertEquals(0.8f, g.difficulty, 0.11f)
+    }
+
+    @Test fun unlimitedSessionNeverEnds() {
+        val (g, _) = game(0.3f, session = Float.POSITIVE_INFINITY)
+        g.run(600f)
+        assertNotEquals(Phase.DONE, g.phase)
+        assertTrue(g.remainingSeconds.isInfinite())
     }
 }
