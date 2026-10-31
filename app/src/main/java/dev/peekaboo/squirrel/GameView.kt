@@ -28,7 +28,7 @@ class GameView(
     private val presses = AtomicInteger(0)
     @Volatile private var resetRequested = false
     @Volatile private var running = false
-    private var thread: Thread? = null
+    @Volatile private var thread: Thread? = null
 
     // Owner override: hold the top-right corner for 3 s.
     private var cornerDownAt = -1L
@@ -65,7 +65,9 @@ class GameView(
 
     override fun surfaceCreated(holder: SurfaceHolder) {
         running = true
-        thread = Thread({ loop() }, "peekaboo-render").apply { start() }
+        val t = Thread({ loop() }, "peekaboo-render")
+        thread = t // assign before start(): loop() exits as soon as thread !== itself
+        t.start()
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
@@ -84,7 +86,10 @@ class GameView(
         var frames = 0
         var fpsT = 0f
         var wildShown = false
-        while (running) {
+        val me = Thread.currentThread()
+        // Also exit if surfaceDestroyed's join timed out and a newer thread replaced us,
+        // so two threads never update the (non-thread-safe) logic or draw at once.
+        while (running && thread === me) {
             val now = System.nanoTime()
             val dt = (now - last) / 1e9f
             last = now
@@ -100,19 +105,22 @@ class GameView(
 
             val c = try {
                 if (Build.VERSION.SDK_INT >= 26) holder.lockHardwareCanvas() else holder.lockCanvas()
-            } catch (e: Exception) { null } ?: continue
+            } catch (e: Exception) { null }
+            if (c == null) { try { Thread.sleep(16) } catch (_: InterruptedException) {}; continue }
             try {
                 renderer.draw(c, g, dt)
             } finally {
                 holder.unlockCanvasAndPost(c)
             }
-            if (!running && wildShown) post { onWildVisible(false) }
             frames++; fpsT += dt
             if (fpsT >= 5f) {
                 Log.i(TAG, "FPS ${"%.1f".format(frames / fpsT)}")
                 frames = 0; fpsT = 0f
             }
         }
+        // Surface gone (screen off / backgrounded): never leave footage up or playing.
+        // The next render thread starts with wildShown=false and re-shows it if still wild.
+        if (wildShown) post { onWildVisible(false) }
     }
 
     companion object { const val TAG = "PeekabooGame" }

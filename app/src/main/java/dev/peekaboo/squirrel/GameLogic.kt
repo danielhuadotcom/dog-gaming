@@ -185,7 +185,9 @@ class GameLogic(
             Phase.CELEBRATE -> if (phaseTime >= phaseDuration) {
                 when {
                     sessionOver -> finish()
-                    tuning.training -> startTraining()
+                    // tuning is only refreshed on HIDDEN, so judge by the *current* difficulty:
+                    // otherwise graduating out of training yields one never-ending appearance.
+                    Tuning.of(difficulty).training -> startTraining()
                     else -> enter(Phase.HIDDEN, 1.0f + rng.nextFloat())
                 }
             }
@@ -301,6 +303,11 @@ class GameLogic(
         } else {
             freezeLeft -= dt
             if (freezeLeft <= 0f) {
+                // Training appearances have no window; still end the session on time.
+                if (tuning.training && sessionOver) {
+                    finish()
+                    return
+                }
                 if (!tuning.training && phaseTime >= phaseDuration) {
                     startRetreat()
                     return

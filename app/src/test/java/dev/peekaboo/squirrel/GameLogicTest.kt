@@ -163,4 +163,24 @@ class GameLogicTest {
         while (g.phase == Phase.VISIBLE) { g.update(0.01f); t += 0.01f }
         assertTrue("$t vs ${g.tuning.window}", t >= g.tuning.window * 1.4f)
     }
+
+    @Test fun trainingSessionEndsEvenWithoutPresses() {
+        val (g, rec) = game(0f, session = 10f)
+        g.run(12f)
+        assertEquals(Phase.DONE, g.phase)
+        assertEquals(1, rec.sounds.count { it == Sound.ALL_DONE })
+    }
+
+    @Test fun graduatingFromTrainingGivesATimedAppearance() {
+        val (g, _) = game(0f, session = 10_000f)
+        // Win until difficulty leaves training (decided while celebrating the last hit).
+        while (g.difficulty < Tuning.TRAINING_BELOW) {
+            assertTrue(g.run(10f) { it.isCritterVisible && it.phase != Phase.CELEBRATE })
+            assertTrue(g.press())
+        }
+        assertTrue(g.run(10f) { it.phase != Phase.CELEBRATE })
+        assertFalse("normal play after graduating", g.tuning.training)
+        // Ignore the critter: it must eventually retreat (previously it stayed out forever).
+        assertTrue(g.run(60f) { it.misses > 0 })
+    }
 }

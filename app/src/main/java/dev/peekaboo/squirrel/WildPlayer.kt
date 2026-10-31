@@ -53,8 +53,12 @@ class WildPlayer(private val ctx: Context, private val view: TextureView, seed: 
     fun show() {
         val p = player ?: return
         if (!prepared || showing) return
+        try {
+            p.start()
+        } catch (e: IllegalStateException) {
+            Log.w(TAG, "WILD start failed", e); prepared = false; return
+        }
         showing = true
-        p.start()
         view.animate().cancel()
         view.alpha = 1f
         Log.i(TAG, "WILD show clip=${current?.name} animal=${current?.animal}")
@@ -64,11 +68,15 @@ class WildPlayer(private val ctx: Context, private val view: TextureView, seed: 
         if (!showing) return
         showing = false
         view.animate().alpha(0f).setDuration(180).withEndAction { prepareNext() }.start()
-        player?.pause()
+        // pause() throws IllegalStateException if the player hit a playback error meanwhile.
+        try { player?.pause() } catch (e: IllegalStateException) { Log.w(TAG, "WILD pause failed", e) }
         Log.i(TAG, "WILD hide clip=${current?.name}")
     }
 
     fun release() {
+        // Cancelling also drops a pending fade's prepareNext() (would leak a new player after release).
+        view.animate().cancel()
+        view.alpha = 0f // else a stale frame would cover the game once the surface comes back
         player?.release(); player = null
         prepared = false; showing = false
     }

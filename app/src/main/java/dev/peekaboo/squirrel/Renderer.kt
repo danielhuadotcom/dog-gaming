@@ -84,12 +84,33 @@ class Renderer {
         text.textSize = h * 0.032f
         text.color = Palette.HUD
         text.textAlign = Paint.Align.LEFT
-        val rem = g.remainingSeconds.toInt()
-        c.drawText(
-            "★ ${g.hits}   lvl ${(g.difficulty * 100).toInt()}%   ${rem / 60}:${"%02d".format(rem % 60)}",
-            h * 0.03f, h * 0.06f, text
-        )
+        c.drawText(hud(g), h * 0.03f, h * 0.06f, text)
     }
+
+    // HUD text is rebuilt only when a shown value changes (String.format every frame is
+    // a steady stream of garbage on a weak tablet).
+    private var hudKey = Long.MIN_VALUE
+    private var hudText = ""
+    private fun hud(g: GameLogic): String {
+        val rem = g.remainingSeconds.toInt()
+        val lvl = (g.difficulty * 100).toInt()
+        val key = (g.hits.toLong() shl 40) or (lvl.toLong() shl 24) or rem.toLong()
+        if (key != hudKey) {
+            hudKey = key
+            val ss = rem % 60
+            hudText = "★ ${g.hits}   lvl $lvl%   ${rem / 60}:${if (ss < 10) "0" else ""}$ss"
+        }
+        return hudText
+    }
+
+    private var restHits = -1
+    private var restText = ""
+    private fun restLine(g: GameLogic): String {
+        if (g.hits != restHits) { restHits = g.hits; restText = "All done — good dog!  ★ ${g.hits}" }
+        return restText
+    }
+
+    private val corners = intArrayOf(-1, 1)
 
     private fun drawBush(c: Canvas, x: Float, groundY: Float, bw: Float, bh: Float) {
         fill.color = Palette.BUSH_SHADE
@@ -158,7 +179,7 @@ class Renderer {
         fill.color = Palette.CRITTER
         r.set(cx - bw, cy - bh * 0.5f, cx + bw, cy + bh * 0.5f)
         c.drawRect(r, fill)
-        for (sx in intArrayOf(-1, 1)) for (sy in intArrayOf(-1, 1))
+        for (sx in corners) for (sy in corners)
             c.drawCircle(cx + sx * bw, cy + sy * bh * 0.55f, bh * 0.6f, fill)
         text.color = Palette.CRITTER
         text.textAlign = Paint.Align.CENTER
@@ -178,7 +199,7 @@ class Renderer {
         text.color = Palette.HUD
         text.textAlign = Paint.Align.CENTER
         text.textSize = h * 0.05f
-        c.drawText("All done — good dog!  ★ ${g.hits}", mx, h * 0.66f, text)
+        c.drawText(restLine(g), mx, h * 0.66f, text)
         text.textSize = h * 0.03f
         c.drawText(restMessage, mx, h * 0.74f, text)
     }

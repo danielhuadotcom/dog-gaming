@@ -91,6 +91,9 @@ class MainActivity : Activity() {
             }
         }
         val left = cooldownLeft()
+        // A tap in the <=500 ms before restUntil was saved must not auto-restart the game
+        // the moment the cooldown later expires.
+        if (left > 0) pendingTapRestart = false
         view.renderer.restMessage = if (left > 0) {
             val s = left / 1000
             "Next play in ${s / 60}:${"%02d".format(s % 60)}   ·   owner: hold top-right corner 3s to play now"
@@ -139,6 +142,10 @@ class MainActivity : Activity() {
     override fun onPause() {
         super.onPause()
         audio.stop()
+        // Footage has its own audio; don't keep playing it in the background. If the surface
+        // was destroyed the new render thread re-shows it; otherwise the cartoon (always drawn
+        // underneath) carries the rest of this appearance.
+        wildPlayer.hide()
         val g = view.logic
         if (g.phase != Phase.DONE && g.hits + g.misses > 0) {
             prefs.edit().putFloat("difficulty", g.difficulty).apply()

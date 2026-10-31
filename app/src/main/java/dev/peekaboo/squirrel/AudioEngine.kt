@@ -28,7 +28,7 @@ class AudioEngine(private val dumpFile: File?) {
     private class Voice(val name: String, val data: FloatArray) { var pos = 0 }
 
     @Volatile private var running = false
-    private var thread: Thread? = null
+    @Volatile private var thread: Thread? = null
 
     fun play(s: Sound) {
         pending.add(s)
@@ -37,10 +37,10 @@ class AudioEngine(private val dumpFile: File?) {
     fun start() {
         if (running) return
         running = true
-        thread = Thread({ loop() }, "peekaboo-audio").apply {
-            priority = Thread.MAX_PRIORITY
-            start()
-        }
+        pending.clear() // don't burst sounds queued while paused
+        val t = Thread({ loop() }, "peekaboo-audio").apply { priority = Thread.MAX_PRIORITY }
+        thread = t // assign before start(): loop() exits as soon as thread !== itself
+        t.start()
     }
 
     fun stop() {
@@ -50,6 +50,17 @@ class AudioEngine(private val dumpFile: File?) {
     }
 
     private fun loop() {
+        val me = Thread.currentThread()
+        // Rebuild the track if it dies (e.g. ERROR_DEAD_OBJECT after an audio route change or
+        // audioserver restart); otherwise sound would stay silent until the next pause/resume.
+        while (running && thread === me) {
+            if (!runTrack(me)) return
+            try { Thread.sleep(200) } catch (_: InterruptedException) { return }
+        }
+    }
+
+    /** Returns true if the track died and should be rebuilt. */
+    private fun runTrack(me: Thread): Boolean {
         val chunk = 256
         val minBuf = AudioTrack.getMinBufferSize(
             sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT
@@ -74,11 +85,10 @@ class AudioEngine(private val dumpFile: File?) {
         val track = try {
             builder.build()
         } catch (e: Exception) {
-            Log.e(TAG, "AudioTrack init failed", e); running = false; return
+            Log.e(TAG, "AudioTrack init failed", e); if (thread === me) running = false; return false
         }
         val dump = dumpFile?.let { WavWriter(it, sampleRate) }
         Log.i(TAG, "ENGINE start sr=$sampleRate buf=$minBuf dump=${dumpFile?.absolutePath}")
-        track.play()
 
         val voices = ArrayList<Voice>(8)
         val mix = FloatArray(chunk)
@@ -86,7 +96,9 @@ class AudioEngine(private val dumpFile: File?) {
         var active = false
         var peak = 0f
         try {
-            while (running) {
+            track.play() // throws IllegalStateException if the track is unusable
+            // Also exit if stop()'s join timed out and a newer thread replaced us.
+            while (running && thread === me) {
                 while (true) {
                     val s = pending.poll() ?: break
                     val data = sounds[s] ?: continue
@@ -122,15 +134,19 @@ class AudioEngine(private val dumpFile: File?) {
                     Log.i(TAG, "OUT silent peak=${"%.3f".format(peak)}")
                     dump?.flushHeader()
                 }
-                track.write(pcm, 0, chunk)
+                val wrote = track.write(pcm, 0, chunk)
+                if (wrote < 0) { Log.w(TAG, "ENGINE write error $wrote, rebuilding"); return true }
                 dump?.write(pcm, chunk)
             }
+        } catch (e: IllegalStateException) {
+            Log.e(TAG, "ENGINE failed", e); return true
         } finally {
             dump?.close()
-            track.stop()
+            try { track.stop() } catch (_: IllegalStateException) {}
             track.release()
             Log.i(TAG, "ENGINE stop")
         }
+        return false
     }
 
     /** Streams 16-bit mono PCM to a WAV file, keeping the header valid as it grows. */
